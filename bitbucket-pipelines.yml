@@ -1,0 +1,53 @@
+image: atlassian/default-image:3
+options:
+  docker: true
+
+definitions:
+  services:
+    docker:
+      memory: 3072
+
+pipelines:
+  branches:
+    staging:
+      - step:
+          name: Docker build and Push image
+          image: docker:latest
+          script:
+
+          #Configuration - env vars
+            - export DOCKER_BUILDKIT=0
+            - export PATH=/usr/bin:$PATH
+            - export CONTAINER_REPOSITORY=registry.digitalocean.com/energias-repository/bff-admin
+            - export CONTAINER_TAG=latest-staging
+
+          #Install doctl
+            - wget https://github.com/digitalocean/doctl/releases/download/v1.101.0/doctl-1.101.0-linux-amd64.tar.gz
+            - tar xf ./doctl-1.101.0-linux-amd64.tar.gz
+            - mv ./doctl /usr/local/bin/doctl
+            - doctl version
+
+          #Login with doctl 
+            - doctl auth init --access-token=$DIGITAL_OCEAN_KEY
+            - docker login -u $DIGITAL_OCEAN_KEY -p $DIGITAL_OCEAN_KEY registry.digitalocean.com
+            - docker build -t $CONTAINER_REPOSITORY .
+            - docker tag $CONTAINER_REPOSITORY:latest $CONTAINER_REPOSITORY:$CONTAINER_TAG
+            - docker push $CONTAINER_REPOSITORY:$CONTAINER_TAG
+
+      - step:
+          name: Deploy to Kubernetes
+          image: atlassian/pipelines-kubectl
+          script:
+            #Configuration - env vars
+            - export KUBE_NAMESPACE=energias
+            - export DEPLOYMENT_NAME=bff-admin
+
+            # NOTE: $KUBECONFIG is secret stored as a base64 encoded string
+            # Base64 decode our kubeconfig file into a temporary kubeconfig.yml file (this will be destroyed automatically after this step runs)
+            - echo $KUBECONFIG_STAGING | base64 -d > kubeconfig.yml
+
+            # Tell our Kubernetes deployment to use the new Docker image tag
+            - kubectl --kubeconfig=kubeconfig.yml --namespace=$KUBE_NAMESPACE get pods -n $KUBE_NAMESPACE
+            - kubectl --kubeconfig=kubeconfig.yml --namespace=$KUBE_NAMESPACE rollout restart deployment $DEPLOYMENT_NAME
+            - kubectl --kubeconfig=kubeconfig.yml --namespace=$KUBE_NAMESPACE get pods -n $KUBE_NAMESPACE
+          deployment: staging
